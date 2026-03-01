@@ -27,8 +27,7 @@ training:
     flip_horizontal: true
     flip_vertical: true
     rotate_90: true
-  num_workers: 4
-  save_every: 10
+num_workers: 2  save_every: 10
   val_every: 5
   resume: false            # Set to true to resume from checkpoint
 
