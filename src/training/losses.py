@@ -1,8 +1,8 @@
 """Loss functions for hyperspectral super-resolution."""
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Tuple
 
 
 class SAMLoss(nn.Module):
@@ -62,9 +62,14 @@ class SSIMLoss(nn.Module):
 
 
 class CombinedLoss(nn.Module):
-    """Combined L1 + SAM + optional SSIM loss."""
+    """Combined L1 + SAM + optional SSIM loss.
 
-    def __init__(self, l1_weight: float = 1.0, sam_weight: float = 0.1, ssim_weight: float = 0.0):
+    Returns a tuple of (total_loss, loss_dict) where loss_dict contains
+    per-component losses for logging.
+    """
+
+    def __init__(self, l1_weight: float = 1.0, sam_weight: float = 0.1,
+                 ssim_weight: float = 0.0):
         super().__init__()
         self.l1_weight = l1_weight
         self.sam_weight = sam_weight
@@ -73,24 +78,58 @@ class CombinedLoss(nn.Module):
         self.sam = SAMLoss()
         self.ssim = SSIMLoss() if ssim_weight > 0 else None
 
-    def forward(self, pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-        loss = self.l1_weight * self.l1(pred, target)
-        loss = loss + self.sam_weight * self.sam(pred, target)
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor
+    ) -> Tuple[torch.Tensor, dict]:
+        l1_loss = self.l1(pred, target)
+        sam_loss = self.sam(pred, target)
+        loss = self.l1_weight * l1_loss + self.sam_weight * sam_loss
+        loss_dict = {
+            "total": loss.item(),
+            "l1": l1_loss.item(),
+            "sam": sam_loss.item(),
+        }
         if self.ssim is not None and self.ssim_weight > 0:
-            loss = loss + self.ssim_weight * self.ssim(pred, target)
-        return loss
+            ssim_loss = self.ssim(pred, target)
+            loss = loss + self.ssim_weight * ssim_loss
+            loss_dict["ssim"] = ssim_loss.item()
+            loss_dict["total"] = loss.item()
+        return loss, loss_dict
 
 
 def build_loss(cfg: dict) -> nn.Module:
-    """Build loss function from config."""
-    loss_cfg = cfg.get("training", {})
+    """Build loss function from config.
+
+    Supports config structure:
+      training:
+        losses:
+          l1_weight: 1.0
+          sam_weight: 0.1
+          ssim_weight: 0.05
+    """
+    train_cfg = cfg.get("training", {})
+    # Loss weights may be nested under training.losses or directly in training
+    loss_cfg = train_cfg.get("losses", train_cfg)
     l1_w = float(loss_cfg.get("l1_weight", 1.0))
     sam_w = float(loss_cfg.get("sam_weight", 0.1))
     ssim_w = float(loss_cfg.get("ssim_weight", 0.0))
-
     if sam_w == 0 and ssim_w == 0:
         print("Using L1 loss only")
-        return nn.L1Loss()
-
+        # Wrap L1Loss to return (loss, loss_dict) tuple for trainer compatibility
+        return _WrappedL1Loss()
     print(f"Using combined loss: L1={l1_w}, SAM={sam_w}, SSIM={ssim_w}")
     return CombinedLoss(l1_weight=l1_w, sam_weight=sam_w, ssim_weight=ssim_w)
+
+
+class _WrappedL1Loss(nn.Module):
+    """L1 loss that returns (loss, loss_dict) for trainer compatibility."""
+
+    def __init__(self):
+        super().__init__()
+        self.l1 = nn.L1Loss()
+
+    def forward(
+        self, pred: torch.Tensor, target: torch.Tensor
+    ) -> Tuple[torch.Tensor, dict]:
+        loss = self.l1(pred, target)
+        return loss, {"total": loss.item(), "l1": loss.item(), "sam": 0.0}
