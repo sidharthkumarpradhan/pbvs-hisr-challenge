@@ -1,0 +1,58 @@
+model:
+  name: "HISRNet"          # Options: HISRNet, EDSR, Bicubic
+  scale: 4
+  num_features: 128
+  num_blocks: 20           # Residual blocks in spatial branch
+  num_spectral_features: 32
+  spectral_group_size: 8   # Process bands in groups of this size
+  use_spectral_attention: true
+  use_3d_features: true
+
+training:
+  epochs: 300
+  batch_size: 8
+  patch_size: 64           # Training patch size (LR)
+  lr: 2.0e-4
+  lr_min: 1.0e-6
+  optimizer: "adam"        # adam or adamw
+  scheduler: "cosine"      # cosine, step, none
+  warmup_epochs: 5
+  weight_decay: 1.0e-4
+  grad_clip: 1.0
+  losses:
+    l1_weight: 1.0
+    sam_weight: 0.1
+    ssim_weight: 0.05
+  augmentation:
+    flip_horizontal: true
+    flip_vertical: true
+    rotate_90: true
+  num_workers: 4
+  save_every: 10
+  val_every: 5
+  resume: false            # Set to true to resume from checkpoint
+
+data:
+  zenodo_url: "https://zenodo.org/api/records/18171738/files-archive"
+  test_url: "https://filesender.belnet.be/?s=download&token=237989c4-8c1a-4bd8-b652-49e5dbd90778"
+  data_dir: "data"
+  train_dir: "data/train"
+  val_dir: "data/val"
+  test_dir: "data/test"
+  # Scene indices for each split (1-indexed, matching filename numbers)
+  # These will be auto-detected if not specified
+  train_scenes: []         # Empty = auto-detect all scenes in train_dir
+  val_scenes: []           # Empty = auto-detect all scenes in val_dir
+  bands: 224               # Number of spectral bands
+  scale: 4
+
+inference:
+  use_tta: true            # Test-time augmentation (flips/rotations)
+  overlap: 32              # Patch overlap for tiled inference
+  tile_size: 200           # Inference tile size (LR)
+  batch_size: 1
+
+submission:
+  output_dir: "predictions"
+  submission_dir: "submission"
+  zip_name: "submission.zip"
