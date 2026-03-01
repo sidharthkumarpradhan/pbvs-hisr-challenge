@@ -1,5 +1,4 @@
 """Download training/validation dataset from Zenodo and test set from provided URL."""
-
 import os
 import re
 import sys
@@ -33,11 +32,24 @@ def _download_file(url: str, dest: Path, desc: str = "Downloading") -> Path:
     return dest
 
 
-def _get_zenodo_file_list() -> list[dict]:
-    """Return list of file metadata dicts from Zenodo API."""
+def _get_zenodo_file_list() -> list:
+    """Return list of file metadata dicts from Zenodo API.
+
+    The Zenodo /files endpoint returns either:
+      - A dict with an 'entries' key: {"entries": [{"key": ..., "links": {...}}, ...]}
+      - A list directly (older API format): [{"key": ..., "links": {...}}, ...]
+    This function normalises both into a plain list of dicts.
+    """
     response = requests.get(ZENODO_FILES_URL, timeout=30)
     response.raise_for_status()
-    return response.json()
+    data = response.json()
+    # New Zenodo InvenioRDM API wraps results in {"entries": [...]}
+    if isinstance(data, dict):
+        return data.get("entries", [])
+    # Old API returns a bare list
+    if isinstance(data, list):
+        return data
+    return []
 
 
 def download_zenodo_individual(data_dir: Path) -> None:
@@ -55,10 +67,29 @@ def download_zenodo_individual(data_dir: Path) -> None:
         download_zenodo_archive(data_dir)
         return
 
+    if not files:
+        print("No files returned from Zenodo API. Falling back to archive download...")
+        download_zenodo_archive(data_dir)
+        return
+
     print(f"Found {len(files)} files to download.")
     for file_info in files:
-        fname = file_info.get("key", file_info.get("filename", "unknown"))
-        furl = file_info.get("links", {}).get("self", file_info.get("download", ""))
+        # file_info must be a dict at this point
+        if not isinstance(file_info, dict):
+            print(f"  Unexpected file entry format: {file_info!r}, skipping.")
+            continue
+
+        # 'key' is the filename in the new API; older API used 'filename'
+        fname = file_info.get("key") or file_info.get("filename") or "unknown"
+
+        # Download URL: new API uses links.content, older uses links.self or download
+        links = file_info.get("links", {})
+        furl = (
+            links.get("content")
+            or links.get("self")
+            or file_info.get("download", "")
+        )
+
         dest = raw_dir / fname
         if dest.exists() and dest.stat().st_size > 0:
             print(f"  Skipping {fname} (already exists)")
@@ -79,13 +110,11 @@ def download_zenodo_archive(data_dir: Path) -> None:
     raw_dir = data_dir / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
     archive_path = data_dir / "zenodo_archive.zip"
-
     if not archive_path.exists():
         print(f"Downloading full Zenodo archive (~8.6 GB) to {archive_path}...")
         _download_file(ZENODO_ARCHIVE_URL, archive_path, desc="Zenodo Archive")
     else:
         print(f"Archive already exists at {archive_path}")
-
     print("Extracting archive...")
     with zipfile.ZipFile(archive_path, "r") as zf:
         zf.extractall(raw_dir)
@@ -107,7 +136,14 @@ def split_scenes(raw_dir: Path, train_dir: Path, val_dir: Path) -> None:
         key=lambda p: int(re.search(r"(\d+)", p.stem).group(1)),
     )
     if len(scene_files) == 0:
-        print("No Scene_*.h5 files found in raw dir. Check download.")
+        # Also try without the Scene_ prefix in case filenames differ
+        scene_files = sorted(
+            [f for f in raw_dir.glob("*.h5")],
+            key=lambda p: p.stem,
+        )
+
+    if len(scene_files) == 0:
+        print("No .h5 files found in raw dir. Check download.")
         return
 
     print(f"Found {len(scene_files)} scene files.")
@@ -119,12 +155,10 @@ def split_scenes(raw_dir: Path, train_dir: Path, val_dir: Path) -> None:
         dest = train_dir / f.name
         if not dest.exists():
             shutil.copy2(f, dest)
-
     for f in val_files:
         dest = val_dir / f.name
         if not dest.exists():
             shutil.copy2(f, dest)
-
     print(f"Split: {len(train_files)} train / {len(val_files)} val scenes")
 
 
@@ -138,12 +172,14 @@ def check_or_download_dataset(cfg: dict) -> None:
 
     existing_train = list(train_dir.glob("*.h5"))
     existing_val = list(val_dir.glob("*.h5"))
-
     if len(existing_train) >= 5 and len(existing_val) >= 1:
-        print(f"Dataset already present: {len(existing_train)} train, {len(existing_val)} val scenes.")
+        print(
+            f"Dataset already present: {len(existing_train)} train, "
+            f"{len(existing_val)} val scenes."
+        )
         return
 
-    existing_raw = list(raw_dir.glob("Scene_*.h5"))
+    existing_raw = list(raw_dir.glob("*.h5"))
     if len(existing_raw) < 5:
         print("Dataset not found. Starting download from Zenodo...")
         download_zenodo_individual(data_dir)
