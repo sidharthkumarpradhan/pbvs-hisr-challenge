@@ -1,0 +1,17 @@
+# Core ML
+torch>=2.1.0
+torchvision>=0.16.0
+numpy>=1.24.0
+
+# Hyperspectral data
+h5py>=3.9.0
+
+# Metrics
+scikit-image>=0.22.0
+scipy>=1.11.0
+
+# Config & utilities
+pyyaml>=6.0.1
+requests>=2.31.0
+tqdm>=4.65.0
+matplotlib>=3.7.0
